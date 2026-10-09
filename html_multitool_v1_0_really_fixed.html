@@ -661,23 +661,81 @@ function openPreviewTab(){
  if(w){w.document.open();w.document.write(currentHTML);w.document.close();}
 }
 function buildPackage(){
- if(!currentHTML){alert("Open an HTML file first.");return}
- let x=currentHTML;
- if(!$('packageComments')?.checked)x=x.replace(/<!--[\s\S]*?-->/g,"");
- const name=$('packageName').value.trim()||safeFileName(projectName,"release.html");
- const version=$('packageVersion').value.trim()||"1.0.0";
- if($('packageMeta')?.checked){
-  const meta=`<meta name="html-multitool-release" content="${escapeHTML(JSON.stringify({name,version,created:new Date().toISOString()})).replace(/"/g,"&quot;")}">`;
-  x=x.includes("</head>")?x.replace("</head>",meta+"</head>"):meta+x;
- }
- if($('packageLicense')?.checked){
-  const product=$('protectProduct')?.value||projectName||"HTML Product";
-  const build=$('protectBuild')?.value||version;
-  const meta={productId:product,buildId:build,licenseRequired:true,created:new Date().toISOString()};
-  x=injectLicenseGate(x,meta);
- }
- packageHTML=x;
- $('packageReport').innerHTML=`Release <b>${escapeHTML(name)}</b> built at version <b>${escapeHTML(version)}</b> • ${formatBytes(new Blob([x]).size)}`;
+try {
+if(!currentHTML){
+alert("Open an HTML file first.");
+return;
+}
+
+let x = currentHTML;
+
+const comments = $('packageComments');
+const metaEnabled = $('packageMeta');
+const licenseEnabled = $('packageLicense');
+
+if(comments && !comments.checked){
+x = x.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+const nameInput = $('packageName');
+const versionInput = $('packageVersion');
+
+const name = nameInput?.value.trim() ||
+safeFileName(projectName || "release", "release.html");
+
+const version = versionInput?.value.trim() || "1.0.0";
+
+if(metaEnabled?.checked){
+const releaseInfo = {
+name: name,
+version: version,
+created: new Date().toISOString()
+};
+
+const meta = '<meta name="html-multitool-release" content="' +
+escapeHTML(JSON.stringify(releaseInfo)).replace(/"/g, """) +
+'">';
+
+if(/</head>/i.test(x)){
+x = x.replace(/</head>/i, meta + "</head>");
+} else {
+x = meta + x;
+}
+}
+
+if(licenseEnabled?.checked){
+if(typeof injectLicenseGate !== "function"){
+throw new Error("The license gate function is missing.");
+}
+
+const product = $('protectProduct')?.value || projectName || "HTML Product";
+const build = $('protectBuild')?.value || version;
+
+const licenseInfo = {
+productId: product,
+buildId: build,
+licenseRequired: true,
+created: new Date().toISOString()
+};
+
+x = injectLicenseGate(x, licenseInfo);
+}
+
+packageHTML = x;
+
+const report = $('packageReport');
+if(report){
+report.textContent =
+"Release " + name + " built successfully. Version: " +
+version + ". Size: " + formatBytes(new Blob([x]).size);
+}
+
+alert("Release built successfully. You can now download it.");
+
+} catch(error) {
+console.error("Release build failed:", error);
+alert("Release build failed: " + error.message);
+}
 }
 function downloadPackage(){
  if(!packageHTML)buildPackage();
