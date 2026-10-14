@@ -970,7 +970,7 @@ function saveSetting(){
  localStorage.setItem('htmlMultitoolRemember',$('remember').checked?'1':'0');
  if($('remember').checked && currentHTML)localStorage.setItem('htmlMultitoolLastHTML',currentHTML);
 }
-if(localStorage.getItem('htmlMultitoolRemember')==='1')$('remember').checked=true;
+ try {   if (localStorage.getItem('htmlMultitoolRemember') === '1') {     $('remember').checked = true;   } } catch (error) {   console.warn('Browser storage is unavailable in this context.'); }
 </script>
 </body>
 </html>
