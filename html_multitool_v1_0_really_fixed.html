@@ -629,12 +629,67 @@ function downloadOptimized(){
  if(!optimizedHTML)runOptimizer();
  if(optimizedHTML)downloadText(optimizedHTML,safeFileName((currentFile && currentFile.name) || "optimized.html","optimized.html"),"text/html");
 }
+
 function refreshPreview(){
- if(!currentHTML){alert("Open an HTML file first.");return}
+ if(!currentHTML){
+  alert("Open an HTML file first.");
+  return;
+ }
+
  previewErrors=[];
+
  const frame=$('livePreview');
- frame.srcdoc=currentHTML;
- $('previewError').textContent="Preview refreshed.";
+
+ // Temporary storage for the sandboxed preview.
+ // Data lasts only until the preview is refreshed.
+ const storageFallback = `
+ <script>
+ (function(){
+   try {
+     window.localStorage;
+   } catch (error) {
+     const memory = {};
+     const fakeStorage = {
+       getItem: key =>
+         Object.prototype.hasOwnProperty.call(memory, key)
+           ? memory[key] : null,
+       setItem: (key, value) => {
+         memory[key] = String(value);
+       },
+       removeItem: key => {
+         delete memory[key];
+       },
+       clear: () => {
+         Object.keys(memory).forEach(key => delete memory[key]);
+       },
+       key: index => Object.keys(memory)[index] ?? null,
+       get length() {
+         return Object.keys(memory).length;
+       }
+     };
+
+     Object.defineProperty(window, "localStorage", {
+       configurable: true,
+       value: fakeStorage
+     });
+   }
+ })();
+ <\/script>`;
+
+ // Insert the fallback before the game's scripts run.
+ let html = currentHTML;
+ const headEnd = html.search(/<\\/head\\s*>/i);
+
+ if(headEnd !== -1){
+   html = html.slice(0, headEnd) +
+     storageFallback + html.slice(headEnd);
+ } else {
+   html = storageFallback + html;
+ }
+
+ frame.srcdoc = html;
+ $('previewError').textContent =
+   "Preview refreshed. Preview-only storage fallback enabled.";
 }
 function openPreviewTab(){
  if(!currentHTML){alert("Open an HTML file first.");return}
