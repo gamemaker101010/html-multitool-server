@@ -421,9 +421,8 @@ function optimizeProject(){
  if(!requireHTML())return;
  optimizedHTML=minifyHTML(currentHTML,true);
  const a=new Blob([currentHTML]).size,b=new Blob([optimizedHTML]).size;
- $('origSize').textContent=formatBytes(a);$('optSize').textContent=formatBytes(b);
- $('savedSize').textContent=(a?Math.max(0,(1-b/a)*100).toFixed(1):0)+'%';
- $('optStatus').textContent=b<a?'Ready':'Already compact';
+ $('optimizerReport').innerHTML=`Original: <b>${formatBytes(a)}</b> → Optimized: <b>${formatBytes(b)}</b> • Savings: <b>${(a?Math.max(0,(1-b/a)*100):0).toFixed(1)}%</b>`;
+ $('optimizerPreview').textContent=optimizedHTML.slice(0,15000);
 }
 
 async function protectProject(){
@@ -437,7 +436,7 @@ async function protectProject(){
  // Conservative JS minification: remove comments and collapse whitespace
  // inside ordinary script blocks without attempting dangerous syntax rewrites.
  if($('protectJS').checked){
-  out=out.replace(/(<script\b[^>]*>)([\s\S]*?)(<\u002fscript>)/gi,(m,a,code,c)=>{
+   out=out.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script>)/gi,(m,a,code,c)=>{
      if(/\bsrc\s*=/i.test(a)) return m;
      let x=code.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[;\n])\s*\/\/.*(?=\n|$)/g,'$1');
      x=x.replace(/\s{2,}/g,' ').trim();
@@ -465,36 +464,23 @@ async function protectProject(){
  'This fingerprint can later be registered with the licensing server so the server can detect whether a distributed build has changed.';
 }
 
-function analyze(){
- if(!requireHTML())return;
- const doc=new DOMParser().parseFromString(currentHTML,'text/html');
- const issues=[];
- if(!doc.title)issues.push('<span class="warn">⚠ Missing &lt;title&gt;</span>');
- if(!doc.querySelector('meta[name="viewport"]'))issues.push('<span class="warn">⚠ Missing viewport meta tag</span>');
- doc.querySelectorAll('img').forEach((img,i)=>{if(!img.alt)issues.push('<span class="warn">⚠ Image '+(i+1)+' has no alt text</span>')});
- if(doc.querySelectorAll('script').length===0)issues.push('<span class="good">✓ No JavaScript blocks detected</span>');
- if(doc.querySelectorAll('script').length>15)issues.push('<span class="warn">⚠ Large number of script blocks</span>');
- if(currentHTML.length>5*1024*1024)issues.push('<span class="warn">⚠ HTML file is larger than 5 MB</span>');
- if(!issues.length)issues.push('<span class="good">✓ No basic static warnings found</span>');
- $('analysis').innerHTML='<div class="kpi" style="margin-top:15px">'+
- '<div class="card"><div class="small">Elements</div><div class="stat">'+doc.querySelectorAll('*').length+'</div></div>'+
- '<div class="card"><div class="small">Scripts</div><div class="stat">'+doc.scripts.length+'</div></div>'+
- '<div class="card"><div class="small">Styles</div><div class="stat">'+doc.querySelectorAll('style,link[rel="stylesheet"]').length+'</div></div>'+
- '<div class="card"><div class="small">Links</div><div class="stat">'+doc.querySelectorAll('a').length+'</div></div></div>'+
- '<div class="section"><h2>Findings</h2>'+issues.map(x=>'<div style="padding:8px 0">'+x+'</div>').join('')+'</div>';
-}
+function analyze(){ return runAnalyzer(); }
 
-function refreshPreview(){
- if(!currentHTML)return;
- $('previewFrame').srcdoc=currentHTML;
+function clearPreview(){
+ const frame=$('livePreview');
+ if(frame)frame.srcdoc='';
+ const msg=$('previewError');
+ if(msg)msg.textContent='Preview cleared.';
 }
-function clearPreview(){$('previewFrame').srcdoc='';}
 
 function packageProject(){
  if(!requireHTML())return;
- const name=(currentFile?.name||'project.html').replace(/\.(html?|HTML?)$/i,'')+'-package.html';
- downloadText(currentHTML,name,'text/html');
- $('packageInfo').textContent='Package exported as '+name;
+ buildPackage();
+ if(packageHTML){
+  const name=safeFileName((currentFile && currentFile.name ? currentFile.name.replace(/\.html?$/i,"") : "project")+"-package.html","project-package.html");
+  downloadText(packageHTML,name.endsWith(".html")?name:name+".html","text/html");
+  $('packageReport').textContent='Package exported as '+name;
+ }
 }
 
 function generateLicenses(){
@@ -570,7 +556,7 @@ async function activateLicense(){
    const response=await fetch(api+'/activate',{
      method:'POST',
      headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({code,activationId,product:$('productName').value.trim()})
+     body:JSON.stringify({code,activationId,product:currentFile?.name||'unknown'})
    });
    const data=await response.json();
    if(!response.ok)throw new Error(data.error||'Activation failed');
@@ -618,13 +604,8 @@ let packageHTML="";
 let pwaFiles={};
 let previewErrors=[];
 
-function downloadText(content,name,type="text/plain"){
- const blob=new Blob([content],{type});
- const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
- setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-}
-function safeFileName(s,fallback){
- s=(s||fallback).trim().replace(/[\\/:*?"<>|]+/g,"-").replace(/\s+/g,"-");
+function safeFileName(s,fallback="download.html"){
+ s=String(s ?? fallback).trim().replace(/[\\\\/:*?"<>|]+/g,"-").replace(/\s+/g,"-");
  return s||fallback;
 }
 function optimizeHTML(source){
@@ -646,7 +627,7 @@ function runOptimizer(){
 }
 function downloadOptimized(){
  if(!optimizedHTML)runOptimizer();
- if(optimizedHTML)downloadText(optimizedHTML,safeFileName(projectName,"optimized.html"),"text/html");
+ if(optimizedHTML)downloadText(optimizedHTML,safeFileName((currentFile && currentFile.name) || "optimized.html","optimized.html"),"text/html");
 }
 function refreshPreview(){
  if(!currentHTML){alert("Open an HTML file first.");return}
@@ -660,89 +641,84 @@ function openPreviewTab(){
  const w=window.open();
  if(w){w.document.open();w.document.write(currentHTML);w.document.close();}
 }
+function injectLicenseGate(sourceHTML, meta){
+ const config = JSON.stringify({
+  server: "https://html-multitool-server.onrender.com",
+  product: String(meta.productId || "HTML Product"),
+  buildId: String(meta.buildId || "")
+ });
+ const gate = `
+<script>
+(function(){
+ const cfg=${config};
+ const storageKey="htmlLicense_"+cfg.product+"_"+cfg.buildId;
+ const activationKey=storageKey+"_activation";
+ function showGate(message){
+  const render=()=>{
+   document.body.innerHTML="";
+   document.body.style.cssText="background:#111;color:#fff;font-family:Arial,sans-serif;padding:30px;text-align:center;min-height:100vh";
+   const title=document.createElement("h2");title.textContent="Activate Your License";document.body.appendChild(title);
+   const note=document.createElement("p");note.textContent=message;document.body.appendChild(note);
+   const input=document.createElement("input");input.placeholder="License key";input.autocomplete="off";input.style.cssText="padding:12px;width:260px;max-width:90%";document.body.appendChild(input);
+   const button=document.createElement("button");button.textContent="Activate";button.style.cssText="padding:12px;margin:12px;cursor:pointer";document.body.appendChild(button);
+   const status=document.createElement("p");document.body.appendChild(status);
+   button.onclick=async function(){
+    const code=input.value.trim().toUpperCase();
+    if(!code){status.textContent="Enter your license key.";return;}
+    button.disabled=true;status.textContent="Checking license...";
+    try{
+     let activationId=localStorage.getItem(activationKey);
+     if(!activationId)activationId=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2);
+     const response=await fetch(cfg.server+"/activate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,activationId,product:cfg.product,buildId:cfg.buildId})});
+     const data=await response.json();
+     if(!response.ok||!data.ok)throw new Error(data.error||"Activation failed.");
+     localStorage.setItem(storageKey,code);localStorage.setItem(activationKey,activationId);location.reload();
+    }catch(error){status.textContent=error.message||"Could not contact the licensing server.";button.disabled=false;}
+   };
+  };
+  if(document.body)render();else document.addEventListener("DOMContentLoaded",render,{once:true});
+ }
+ async function verifyLicense(){
+  const code=localStorage.getItem(storageKey),activationId=localStorage.getItem(activationKey);
+  if(!code||!activationId){showGate("Enter the license key supplied with your purchase.");return;}
+  try{
+   const response=await fetch(cfg.server+"/activate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,activationId,product:cfg.product,buildId:cfg.buildId})});
+   const data=await response.json();
+   if(!response.ok||!data.ok){localStorage.removeItem(storageKey);localStorage.removeItem(activationKey);showGate(data.error||"License verification failed.");}
+  }catch(error){showGate("Unable to verify your license. Check your internet connection.");}
+ }
+ if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",verifyLicense,{once:true});else verifyLicense();
+})();
+<\/script>`;
+ const closeBody=sourceHTML.toLowerCase().lastIndexOf("</body>");
+ return closeBody>=0?sourceHTML.slice(0,closeBody)+gate+sourceHTML.slice(closeBody):sourceHTML+gate;
+}
+
 function buildPackage(){
-try {
-if(!currentHTML){
-alert("Open an HTML file first.");
-return;
-}
-
-let x = currentHTML;
-
-const comments = $('packageComments');
-const metaEnabled = $('packageMeta');
-const licenseEnabled = $('packageLicense');
-
-if(comments && !comments.checked){
-x = x.replace(/<!--[\s\S]*?-->/g, "");
-}
-
-const nameInput = $('packageName');
-const versionInput = $('packageVersion');
-
-const name = nameInput?.value.trim() ||
-safeFileName(projectName || "release", "release.html");
-
-const version = versionInput?.value.trim() || "1.0.0";
-
-if(metaEnabled?.checked){
-const releaseInfo = {
-name: name,
-version: version,
-created: new Date().toISOString()
-};
-
-const meta = '<meta name="html-multitool-release" content="' +
-escapeHTML(JSON.stringify(releaseInfo)).replace(/"/g, """) +
-'">';
-
-if(/</head>/i.test(x)){
-x = x.replace(/</head>/i, meta + "</head>");
-} else {
-x = meta + x;
-}
-}
-
-if(licenseEnabled?.checked){
-if(typeof injectLicenseGate !== "function"){
-throw new Error("The license gate function is missing.");
-}
-
-const product = $('protectProduct')?.value || projectName || "HTML Product";
-const build = $('protectBuild')?.value || version;
-
-const licenseInfo = {
-productId: product,
-buildId: build,
-licenseRequired: true,
-created: new Date().toISOString()
-};
-
-x = injectLicenseGate(x, licenseInfo);
-}
-
-packageHTML = x;
-
-const report = $('packageReport');
-if(report){
-report.textContent =
-"Release " + name + " built successfully. Version: " +
-version + ". Size: " + formatBytes(new Blob([x]).size);
-}
-
-alert("Release built successfully. You can now download it.");
-
-} catch(error) {
-console.error("Release build failed:", error);
-alert("Release build failed: " + error.message);
-}
+ if(!currentHTML){alert("Open an HTML file first.");return}
+ let x=currentHTML;
+ if(!$('packageComments')?.checked)x=x.replace(/<!--[\s\S]*?-->/g,"");
+ const name=$('packageName').value.trim()||safeFileName((currentFile && currentFile.name) || "release.html","release.html");
+ const version=$('packageVersion').value.trim()||"1.0.0";
+ if($('packageMeta')?.checked){
+  const meta=`<meta name="html-multitool-release" content="${escapeHTML(JSON.stringify({name,version,created:new Date().toISOString()})).replace(/"/g,"&quot;")}">`;
+  x=x.includes("</head>")?x.replace("</head>",meta+"</head>"):meta+x;
+ }
+ if($('packageLicense')?.checked){
+  const product=($('sellerProduct')?.value||'HTML Product').trim();
+  const build=version;
+  const meta={productId:product,buildId:build,licenseRequired:true,created:new Date().toISOString()};
+  x=injectLicenseGate(x,meta);
+ }
+ packageHTML=x;
+ $('packageReport').innerHTML=`Release <b>${escapeHTML(name)}</b> built at version <b>${escapeHTML(version)}</b> • ${formatBytes(new Blob([x]).size)}`;
 }
 function downloadPackage(){
- if(!packageHTML)buildPackage();
- if(packageHTML){
-  const name=safeFileName($('packageName').value||"release.html","release.html");
-  downloadText(packageHTML,name.endsWith(".html")?name:name+".html","text/html");
- }
+ buildPackage();
+ if(!packageHTML)return;
+ let name=safeFileName($('packageName').value||"release.html","release.html");
+ if(!/\.html?$/i.test(name))name+=".html";
+ downloadText(packageHTML,name,"text/html");
 }
 async function inspectAssets(files){
  const arr=Array.from(files||[]);
@@ -763,7 +739,7 @@ function imageToDataURL(file){
  r.readAsDataURL(file);
 }
 function buildPWA(){
- const name=$('pwaName').value.trim()||projectName||"HTML App";
+ const name=$('pwaName').value.trim()||(currentFile && currentFile.name ? currentFile.name.replace(/\.html?$/i,"") : "")||"HTML App";
  const short=$('pwaShort').value.trim()||name.slice(0,20);
  const start=$('pwaStart').value.trim()||"./";
  const theme=$('pwaTheme').value.trim()||"#0b0b0f";
@@ -908,10 +884,8 @@ function renderSellerTable(){
     '<td class="'+cls+'">'+escapeHTML(x.status)+'</td>'+
     '<td>'+escapeHTML(x.created?new Date(x.created).toLocaleString():'—')+'</td>'+
     '<td>'+escapeHTML(x.activated?new Date(x.activated).toLocaleString():'—')+'</td>'+
-    
-'<td><button class="miniBtn" onclick=\'copyTextToClipboard("' + escapeHTML(x.code) + '")\'>Copy</button> '+
-(x.status!=='REVOKED'?'<button class="miniBtn" onclick=\'revokeSellerLicense("' + escapeHTML(x.id) + '")\'>Revoke</button>':'')+
-
+    '<td><button class="miniBtn" onclick="copyTextToClipboard('+JSON.stringify(x.code)+')">Copy</button> '+
+    (x.status!=='REVOKED'?'<button class="miniBtn" onclick="revokeSellerLicense('+JSON.stringify(x.id)+')">Revoke</button>':'')+
     '</td></tr>';
  }).join('')+'</tbody></table></div>';
 }
@@ -938,45 +912,14 @@ async function revokeSellerLicense(id){
  }catch(e){alert(e.message)}
 }
 
-function copyTextToClipboard(text){
-  const input=document.createElement("input");
-  input.value=text;
-  input.style.position="fixed";
-  input.style.left="-9999px";
-  document.body.appendChild(input);
-
-  input.focus();
-  input.select();
-  input.setSelectionRange(0,input.value.length);
-
-  let copied=false;
-
-  try{
-    copied=document.execCommand("copy");
-  }catch(e){
-    copied=false;
-  }
-
-  document.body.removeChild(input);
-
-  if(copied){
-    toast("✓ License code copied");
-  }else{
-    prompt("Copy this license code:",text);
-  }
+async function copyTextToClipboard(text){
+ try{await navigator.clipboard.writeText(text);toast('Copied license code');}
+ catch{prompt('Copy this license code:',text)}
 }
-
 async function copyUnusedCodes(){
-  const codes=(sellerRecords||[])
-    .filter(x=>x.status==='UNUSED')
-    .map(x=>x.code);
-
-  if(!codes.length){
-    alert('There are no unused licenses.');
-    return;
-  }
-
-  await copyTextToClipboard(codes.join('\n'));
+ const codes=(sellerRecords||[]).filter(x=>x.status==='UNUSED').map(x=>x.code);
+ if(!codes.length){alert('There are no unused licenses.');return}
+ await copyTextToClipboard(codes.join('\n'));
 }
 function exportSellerCSV(){
  const rows=[['Product','Code','Status','Created','Activated']];
@@ -993,7 +936,8 @@ function toast(msg){
 function generateManifest(){
  const name=$('pwaName').value.trim()||'My HTML App';
  manifestText=JSON.stringify({name,short_name:name.slice(0,12),start_url:'./',display:'standalone',background_color:'#090a0f',theme_color:'#8b5cf6',description:'Web application'},null,2);
- $('manifestOutput').textContent=manifestText;
+ pwaFiles["manifest.json"]=manifestText;
+ $('pwaReport').textContent='Generated manifest.json.';
 }
 
 function performanceScan(){
@@ -1003,7 +947,8 @@ function performanceScan(){
  let score=100;
  if(currentHTML.length>2e6)score-=15;if(scripts>10)score-=10;if(imgs>30)score-=10;if(styles>8)score-=5;
  score=Math.max(0,score);
- $('performanceOutput').innerHTML='<div class="section"><div class="stat">'+score+'/100</div><p class="small">Static estimate, not a real FPS or runtime benchmark.</p><div class="badge">File: '+formatBytes(new Blob([currentHTML]).size)+'</div><div class="badge">Scripts: '+scripts+'</div><div class="badge">Images: '+imgs+'</div><div class="badge">Style blocks: '+styles+'</div></div>';
+ const target=$('performanceReport')||$('performanceResults')||$('pwaReport');
+ if(target)target.innerHTML='<div class="section"><div class="stat">'+score+'/100</div><p class="small">Static estimate, not a real FPS or runtime benchmark.</p><div class="badge">File: '+formatBytes(new Blob([currentHTML]).size)+'</div><div class="badge">Scripts: '+scripts+'</div><div class="badge">Images: '+imgs+'</div><div class="badge">Style blocks: '+styles+'</div></div>';
 }
 
 function downloadText(text,name,type){
